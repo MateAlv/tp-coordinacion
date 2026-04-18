@@ -3,6 +3,7 @@ import logging
 import socket
 import signal
 import multiprocessing
+import uuid
 import message_handler
 from common import middleware, message_protocol
 
@@ -43,33 +44,25 @@ def handle_client_request(client_socket, message_handler):
         output_queue.close()
 
 
-def handle_client_response(client_list):
+def handle_client_response(clients):
     input_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, INPUT_QUEUE)
 
     def _consume_result(message, ack, nack):
-        client_index = 0
         try:
-            for [message_handler_instance, client_socket] in client_list:
-                deserialized_message = (
-                    message_handler_instance.deserialize_result_message(message)
-                )
+            client_id, deserialized_message = message_handler.deserialize_result_message(message)
+            client_socket = clients[client_id]
 
-                if not deserialized_message:
-                    client_index += 1
-                    continue
-
-                message_protocol.external.send_msg(
-                    client_socket,
-                    message_protocol.external.MsgType.FRUIT_TOP,
-                    deserialized_message,
-                )
-                message_protocol.external.recv_msg(client_socket)
-                break
-            client_list.pop(client_index)
+            message_protocol.external.send_msg(
+                client_socket,
+                message_protocol.external.MsgType.FRUIT_TOP,
+                deserialized_message,
+            )
+            message_protocol.external.recv_msg(client_socket)
+            del clients[client_id]
             ack()
         except socket.error:
             logging.error("The connection with the server was lost")
-            client_list.pop(client_index)
+            del clients[client_id]
             ack()
         except Exception as e:
             logging.error(e)
@@ -80,9 +73,9 @@ def handle_client_response(client_list):
     input_queue.close()
 
 
-def handle_sigterm(server_socket, client_list, sigterm_received):
+def handle_sigterm(server_socket, client_dict, sigterm_received):
     server_socket.shutdown(socket.SHUT_RDWR)
-    for [_, client_socket] in client_list:
+    for [_, client_socket] in client_dict.values():
         client_socket.shutdown(socket.SHUT_RDWR)
     sigterm_received.value = 1
 
@@ -91,10 +84,10 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     with multiprocessing.Manager() as manager:
-        client_list = manager.list()
+        client_dict = manager.dict()
         sigterm_received = manager.Value("c_short", 0)
         with multiprocessing.Pool(processes=os.process_cpu_count()) as processes_pool:
-            processes_pool.apply_async(handle_client_response, (client_list,))
+            processes_pool.apply_async(handle_client_response, (client_dict,))
 
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
                 logging.info("Listening to connections")
@@ -103,7 +96,7 @@ def main():
                 signal.signal(
                     signal.SIGTERM,
                     lambda signum, frame: handle_sigterm(
-                        server_socket, client_list, sigterm_received
+                        server_socket, client_dict, sigterm_received
                     ),
                 )
                 while True:
@@ -112,7 +105,9 @@ def main():
 
                         logging.info("A new client has connected")
                         message_handler_instance = message_handler.MessageHandler()
-                        client_list.append([message_handler_instance, client_socket])
+                        client_id = str(uuid.uuid4())
+
+                        client_dict[client_id] = [message_handler_instance, client_socket]
                         processes_pool.apply_async(
                             handle_client_request,
                             (client_socket, message_handler_instance),
