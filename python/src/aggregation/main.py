@@ -40,7 +40,7 @@ class AggregationFilter:
     def _process_eof(self, client_id):
         logging.info("Received EOF")
 
-        client_fruit_top = self.clients_fruit_top.get(client_id, [])
+        client_fruit_top = self.clients_fruit_top.setdefault(client_id, [])
 
         fruit_chunk = list(client_fruit_top[-TOP_SIZE:])
         fruit_chunk.reverse()
