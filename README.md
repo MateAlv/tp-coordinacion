@@ -54,8 +54,8 @@ La implementación base respeta la división de responsabilidades de los distint
 
 No obstante, esta implementación no cubre los objetivos buscados tal y como es presentada. Entre sus falencias puede destactarse que:
 
- - No se implementa la interfaz del middleware. 
- - No se dividen los flujos de datos de los clientes más allá del Gateway, por lo que no se es capaz de resolver múltiples consultas concurrentemente.
+ - No se implementa la interfaz del middleware. DONE
+ - No se dividen los flujos de datos de los clientes más allá del Gateway, por lo que no se es capaz de resolver múltiples consultas concurrentemente. DONE
  - No se implementan mecanismos de sincronización que permitan escalar los controles Sum y Aggregator. En particular:
    - Las instancias de Sum se dividen el trabajo, pero solo una de ellas recibe la notificación de finalización en la ingesta de datos.
    - Las instancias de Sum realizan _broadcast_ a todas las instancias de Aggregator, en lugar de agrupar los datos por algún criterio y evitar procesamiento redundante.
