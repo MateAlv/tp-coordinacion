@@ -46,12 +46,13 @@ def handle_client_request(client_socket, message_handler, client_id):
 
 def handle_client_response(client_list):
     input_queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, INPUT_QUEUE)
+    result_handler = message_handler.MessageHandler()
 
     def _consume_result(message, ack, nack):
         client_index = 0
         try:
-            client_id, deserialized_message = message_handler.MessageHandler().deserialize_result_message(message)
-            for [entry_id, _, client_socket] in client_list:
+            client_id, deserialized_message = result_handler.deserialize_result_message(message)
+            for [entry_id, client_socket] in client_list:
                 if entry_id == client_id:
                     break
                 client_index += 1
@@ -79,7 +80,7 @@ def handle_client_response(client_list):
 
 def handle_sigterm(server_socket, client_list, sigterm_received):
     server_socket.shutdown(socket.SHUT_RDWR)
-    for [_, _, client_socket] in client_list:
+    for [client_id, client_socket] in client_list:
         client_socket.shutdown(socket.SHUT_RDWR)
     sigterm_received.value = 1
 
@@ -110,7 +111,7 @@ def main():
                         logging.info("A new client has connected")
                         client_id = str(uuid.uuid4())
                         message_handler_instance = message_handler.MessageHandler()
-                        client_list.append([client_id, message_handler_instance, client_socket])
+                        client_list.append([client_id, client_socket])
                         processes_pool.apply_async(
                             handle_client_request,
                             (client_socket, message_handler_instance, client_id),
