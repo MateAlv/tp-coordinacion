@@ -26,7 +26,7 @@ class JoinFilter:
     def process_messsage(self, message, ack, nack):
         logging.info("Received top")
         fruit_top = message_protocol.internal.deserialize(message)
-        self.output_queue.send(message_protocol.internal.serialize(fruit_top))
+        self.output_queue.send(message_protocol.internal.serialize(fruit_top)) # ??? What do joiners do then jajaja
         ack()
 
     def start(self):
