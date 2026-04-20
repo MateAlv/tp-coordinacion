@@ -27,7 +27,7 @@ class AggregationFilter:
 
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data message")
-        client_fruit_top = self.clients_fruit_top.get(client_id, [])
+        client_fruit_top = self.clients_fruit_top.setdefault(client_id, [])
     
         for i in range(len(client_fruit_top)):
             if client_fruit_top[i].fruit == fruit:
