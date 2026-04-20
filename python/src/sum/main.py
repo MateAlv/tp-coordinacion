@@ -24,12 +24,12 @@ class SumFilter:
                 MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
             )
             self.data_output_exchanges.append(data_output_exchange)
-        self.amount_by_fruit = {}
+        self.client_amount_by_fruit = {}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
 
-        client_fruits = self.amount_by_fruit.setdefault(client_id, {})
+        client_fruits = self.client_amount_by_fruit.setdefault(client_id, {})
         client_fruits[fruit] = client_fruits.get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
@@ -37,18 +37,20 @@ class SumFilter:
     def _process_eof(self, client_id):
         logging.info(f"Broadcasting data messages")
 
-        client_amount_by_fruit = self.amount_by_fruit.get(client_id, {})
+        client_amount_by_fruit = self.client_amount_by_fruit.get(client_id, {})
         for final_fruit_item in client_amount_by_fruit.values():
             for data_output_exchange in self.data_output_exchanges:
                 data_output_exchange.send(
                     message_protocol.internal.serialize(
-                        [final_fruit_item.fruit, final_fruit_item.amount]
+                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                     )
                 )
 
         logging.info(f"Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:
             data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+
+        self.client_amount_by_fruit.pop(client_id, None)
 
 
     def process_data_messsage(self, message, ack, nack):
