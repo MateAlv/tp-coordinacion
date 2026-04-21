@@ -33,6 +33,9 @@ class SumFilter:
         self.clients = {}
         self.is_leader = False
 
+    def _get_exchange_to_aggs(self, fruit):
+        return self.data_output_exchanges[hash(fruit) % AGGREGATION_AMOUNT]
+
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
 
@@ -48,12 +51,11 @@ class SumFilter:
 
         client_fruits = self.clients.get(client_id, [{}, 0])[FRUITS_POS]
         for final_fruit_item in client_fruits.values():
-            for data_output_exchange in self.data_output_exchanges:
-                data_output_exchange.send(
-                    message_protocol.internal.serialize(
-                        [client_id, final_fruit_item.fruit, final_fruit_item.amount]
-                    )
+            self._get_exchange_to_aggs(final_fruit_item.fruit).send(
+                message_protocol.internal.serialize(
+                    [client_id, final_fruit_item.fruit, final_fruit_item.amount]
                 )
+            )
 
         logging.info(f"Broadcasting EOF message")
         for data_output_exchange in self.data_output_exchanges:
