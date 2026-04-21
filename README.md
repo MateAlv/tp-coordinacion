@@ -79,3 +79,7 @@ Al momento de la evaluación y ejecución de las pruebas se **descartarán** o *
 - La implementación del protocolo de comunicación externo y `FruitItem`.
 
 Redactar un breve informe explicando el modo en que se coordinan las instancias de Sum y Aggregation, así como el modo en el que el sistema escala respecto a los clientes y a la cantidad de controles.
+
+
+## Coordinación planteada (Formalizar...):
+We are supposed to partition packages to each agg based on their id and amount. EOF is handled with summers keeping track of received messages. Then when first summer gets the EOF with the expected messagfes  then it should fanout the EOF and all summers should start sending through a leader channel their current amount and their id whenever they get a new message after EOF. This way, the leader has to keep track of all processed messages and send the EOF forward when expected message count equals count received.
