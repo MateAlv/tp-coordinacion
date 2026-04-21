@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import zlib # Importo para hashing consistente de routing entre instancias de Sum 
 
 from common import middleware, message_protocol, fruit_item
 
@@ -34,7 +35,8 @@ class SumFilter:
         self.is_leader = False
 
     def _get_exchange_to_aggs(self, fruit):
-        return self.data_output_exchanges[hash(fruit) % AGGREGATION_AMOUNT]
+        routing_exchange_key = zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
+        return self.data_output_exchanges[routing_exchange_key]
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
