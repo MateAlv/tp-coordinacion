@@ -32,15 +32,36 @@ class SumFilter:
             )
             self.data_output_exchanges.append(data_output_exchange)
 
+
+        self.lock = threading.Lock()
         self.clients = {}
-        self.is_leader = False
+        
+        self.pending_eof = {}
+
+        self.leader_totals = {}  
+        self.expected_totals = {}
+
+        self.my_response_queue_name = f"{SUM_RESPONSE_QUEUE_PREFIX}_{ID}"
 
     def _get_exchange_to_aggs(self, fruit):
         routing_exchange_key = zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
         return self.data_output_exchanges[routing_exchange_key]
+    
+    def _response_queue_name(self, leader_id):
+        return f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
+
+    def _new_control_exchange(self):
+        return middleware.MessageMiddlewareExchangeRabbitMQ(
+            MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE]
+        )
+
+    def _new_response_queue(self, leader_id):
+        return middleware.MessageMiddlewareQueueRabbitMQ(
+            MOM_HOST, self._response_queue_name(leader_id)
+        )
 
     def _process_data(self, client_id, fruit, amount):
-        logging.info(f"Process data")
+        logging.info("Processing data for client %s", client_id)
 
         client = self.clients.setdefault(client_id, [{}, 0])
 
