@@ -4,6 +4,7 @@ import threading
 
 from common import middleware, message_protocol, fruit_item
 
+# ENV variables:
 ID = int(os.environ["ID"])
 MOM_HOST = os.environ["MOM_HOST"]
 INPUT_QUEUE = os.environ["INPUT_QUEUE"]
@@ -12,6 +13,10 @@ SUM_PREFIX = os.environ["SUM_PREFIX"]
 SUM_CONTROL_EXCHANGE = "SUM_CONTROL_EXCHANGE"
 AGGREGATION_AMOUNT = int(os.environ["AGGREGATION_AMOUNT"])
 AGGREGATION_PREFIX = os.environ["AGGREGATION_PREFIX"]
+
+# Positions for client list of items:
+FRUITS_POS = 0
+MESSAGE_COUNT_POS = 1
 
 class SumFilter:
     def __init__(self):
@@ -24,13 +29,16 @@ class SumFilter:
                 MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
             )
             self.data_output_exchanges.append(data_output_exchange)
-        self.client_amount_by_fruit = {}
+
+        self.clients = {}
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
 
-        client_fruits = self.client_amount_by_fruit.setdefault(client_id, {})
-        client_fruits[fruit] = client_fruits.get(
+        client = self.clients.setdefault(client_id, [{}, 0])
+        
+        client[MESSAGE_COUNT_POS] += 1
+        client[FRUITS_POS][fruit] = client[FRUITS_POS].get(
             fruit, fruit_item.FruitItem(fruit, 0)
         ) + fruit_item.FruitItem(fruit, int(amount))
 
