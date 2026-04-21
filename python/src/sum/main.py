@@ -31,12 +31,13 @@ class SumFilter:
             self.data_output_exchanges.append(data_output_exchange)
 
         self.clients = {}
+        self.is_leader = False
 
     def _process_data(self, client_id, fruit, amount):
         logging.info(f"Process data")
 
         client = self.clients.setdefault(client_id, [{}, 0])
-        
+
         client[MESSAGE_COUNT_POS] += 1
         client[FRUITS_POS][fruit] = client[FRUITS_POS].get(
             fruit, fruit_item.FruitItem(fruit, 0)
@@ -45,8 +46,8 @@ class SumFilter:
     def _process_eof(self, client_id):
         logging.info(f"Broadcasting data messages")
 
-        client_amount_by_fruit = self.client_amount_by_fruit.get(client_id, {})
-        for final_fruit_item in client_amount_by_fruit.values():
+        client_fruits = self.clients.get(client_id, {{},0})[FRUITS_POS]
+        for final_fruit_item in client_fruits.values():
             for data_output_exchange in self.data_output_exchanges:
                 data_output_exchange.send(
                     message_protocol.internal.serialize(
