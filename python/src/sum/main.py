@@ -46,7 +46,7 @@ class SumFilter:
     def _process_eof(self, client_id):
         logging.info(f"Broadcasting data messages")
 
-        client_fruits = self.clients.get(client_id, {{},0})[FRUITS_POS]
+        client_fruits = self.clients.get(client_id, [{}, 0])[FRUITS_POS]
         for final_fruit_item in client_fruits.values():
             for data_output_exchange in self.data_output_exchanges:
                 data_output_exchange.send(
@@ -59,7 +59,7 @@ class SumFilter:
         for data_output_exchange in self.data_output_exchanges:
             data_output_exchange.send(message_protocol.internal.serialize([client_id]))
 
-        self.client_amount_by_fruit.pop(client_id, None)
+        self.clients.pop(client_id, None)
 
 
     def process_data_messsage(self, message, ack, nack):
@@ -67,7 +67,8 @@ class SumFilter:
         if len(fields) == 3:
             self._process_data(*fields)
         else:
-            self._process_eof(*fields)
+            client_id = fields[0]
+            self._process_eof(client_id)
         ack()
 
     def start(self):
