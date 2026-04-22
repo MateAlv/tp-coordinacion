@@ -35,9 +35,17 @@ class JoinFilter:
 
         if self.received_count[client_id] < AGGREGATION_AMOUNT:
             # client done, should send eof forwrd
+            pass
         
-        fruit_top = message_protocol.internal.deserialize(message)
-        self.output_queue.send(message_protocol.internal.serialize(fruit_top)) # ??? What do joiners do then jajaja
+        total_by_fruit = {}
+        for partial in self.partial_tops[client_id]:
+            for fruit, amount in partial:
+                total_by_fruit[fruit] = total_by_fruit.get(fruit, 0) + int(amount)
+
+        self.output_queue.send(
+            message_protocol.internal.serialize([client_id, total_by_fruit])
+        )
+
         ack()
 
     def start(self):
