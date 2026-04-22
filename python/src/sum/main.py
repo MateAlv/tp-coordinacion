@@ -154,7 +154,17 @@ class SumFilter:
             logging.exception("Error processing data message")
             nack()
 
+    def _start_control_thread(self):
+        exchange = middleware.MessageMiddlewareExchangeRabbitMQ(MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE])
+        exchange.start_consuming(self._handle_eof_signal)
+
+    def _start_response_thread(self):
+        queue = middleware.MessageMiddlewareQueueRabbitMQ(MOM_HOST, self.my_response_queue_name)
+        queue.start_consuming(self._leader_handle_count_report)
+
     def start(self):
+        threading.Thread(target=self._start_control_thread).start()
+        threading.Thread(target=self._start_response_thread).start()
         self.input_queue.start_consuming(self.process_messsage)
 
 def main():
