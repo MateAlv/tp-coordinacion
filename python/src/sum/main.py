@@ -69,6 +69,22 @@ class SumFilter:
 
         ack()
 
+    def _handle_count_report(self, message, ack, nack):
+        client_id, count = message_protocol.internal.deserialize(message)
+
+        self.leader_totals[client_id] = self.leader_totals.get(client_id, 0) + count
+
+        expected = self.expected_totals.get(client_id)
+        if expected is not None and self.leader_totals[client_id] == expected:
+            for data_output_exchange in self.data_output_exchanges:
+                data_output_exchange.send(message_protocol.internal.serialize([client_id]))
+            del self.leader_totals[client_id]
+            del self.expected_totals[client_id]
+            self.clients.pop(client_id, None)
+            self.pending_eof.pop(client_id, None)
+
+        ack()
+
     def _forward_data_to_aggs(self, client_id, fruit, amount):
         self._get_exchange_to_aggs(fruit).send(
             message_protocol.internal.serialize([client_id, fruit, int(amount)])
