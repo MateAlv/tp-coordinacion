@@ -54,12 +54,12 @@ class SumFilter:
         control_exchange.close()
 
     def _handle_control_signal(self, message, ack, nack):
-        client_id, count, leader_id = message_protocol.internal.deserialize(message)
+        client_id, expected_totals, leader_id = message_protocol.internal.deserialize(message)
 
         self.lock.acquire()
         current_count = self.clients.get(client_id, [{}, 0])[MESSAGE_COUNT_POS]
         current_fruits = dict(self.clients.get(client_id, [{}, 0])[FRUITS_POS])
-        self.pending_eof[client_id] = (count, leader_id)
+        self.pending_eof[client_id] = (expected_totals, leader_id)
         self.lock.release()
 
         for fruit_item in current_fruits.values():
