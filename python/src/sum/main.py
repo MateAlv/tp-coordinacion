@@ -53,7 +53,23 @@ class SumFilter:
         )
         control_exchange.close()
 
-    def _forward_data_to_aggregation(self, client_id, fruit, amount):
+    def _handle_control_signal(self, message, ack, nack):
+        client_id, count, leader_id = message_protocol.internal.deserialize(message)
+
+        self.lock.acquire()
+        current_count = self.clients.get(client_id, [{}, 0])[MESSAGE_COUNT_POS]
+        current_fruits = dict(self.clients.get(client_id, [{}, 0])[FRUITS_POS])
+        self.pending_eof[client_id] = (count, leader_id)
+        self.lock.release()
+
+        for fruit_item in current_fruits.values():
+            self._forward_data_to_aggs(client_id, fruit_item.fruit, fruit_item.amount)
+
+        self._report_increment_to_leader(client_id, leader_id, increment=current_count)
+
+        ack()
+
+    def _forward_data_to_aggs(self, client_id, fruit, amount):
         self._get_exchange_to_aggs(fruit).send(
             message_protocol.internal.serialize([client_id, fruit, int(amount)])
         )
@@ -74,7 +90,7 @@ class SumFilter:
             return
 
         _, leader_id = pending
-        self._forward_data_to_aggregation(client_id, fruit, amount)
+        self._forward_data_to_aggs(client_id, fruit, amount)
         self._report_increment_to_leader(client_id, leader_id, 1)
 
     def _handle_gateway_eof(self, client_id, expected_count):
