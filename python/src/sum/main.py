@@ -46,14 +46,7 @@ class SumFilter:
         routing_exchange_key = zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
         return self.data_output_exchanges[routing_exchange_key]
     
-    def _broadcast_control_signal(self, client_id, expected_count):
-        control_exchange = self._new_control_exchange()
-        control_exchange.send(
-            message_protocol.internal.serialize([client_id, int(expected_count), ID])
-        )
-        control_exchange.close()
-
-    def _handle_control_signal(self, message, ack, nack):
+    def _handle_eof_signal(self, message, ack, nack):
         client_id, expected_totals, leader_id = message_protocol.internal.deserialize(message)
 
         self.lock.acquire()
@@ -69,7 +62,14 @@ class SumFilter:
 
         ack()
 
-    def _handle_count_report(self, message, ack, nack):
+    def _leader_broadcast_eof(self, client_id, expected_count):
+        control_exchange = self._new_control_exchange()
+        control_exchange.send(
+            message_protocol.internal.serialize([client_id, int(expected_count), ID])
+        )
+        control_exchange.close()
+
+    def _leader_handle_count_report(self, message, ack, nack):
         client_id, count = message_protocol.internal.deserialize(message)
 
         self.leader_totals[client_id] = self.leader_totals.get(client_id, 0) + count
@@ -109,11 +109,11 @@ class SumFilter:
         self._forward_data_to_aggs(client_id, fruit, amount)
         self._report_increment_to_leader(client_id, leader_id, 1)
 
-    def _handle_gateway_eof(self, client_id, expected_count):
+    def _leader_handle_gateway_eof(self, client_id, expected_count):
         with self.lock:
             self.expected_totals[client_id] = int(expected_count)
 
-        self._broadcast_control_signal(client_id, expected_count)
+        self._leader_broadcast_eof(client_id, expected_count)
 
     def _response_queue_name(self, leader_id):
         return f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
@@ -145,7 +145,7 @@ class SumFilter:
             if len(fields) == 3:
                 self._handle_data_record(*fields)
             elif len(fields) == 2:
-                self._handle_gateway_eof(*fields)
+                self._leader_handle_gateway_eof(*fields)
             else:
                 raise ValueError(f"Unexpected message format: {fields}")
 
