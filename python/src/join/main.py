@@ -23,8 +23,19 @@ class JoinFilter:
             MOM_HOST, OUTPUT_QUEUE
         )
 
+        self.partial_tops = {}
+        self.received_count = {}  
+
     def process_messsage(self, message, ack, nack):
         logging.info("Received top")
+
+        client_id, fruit_top = message_protocol.internal.deserialize(message)
+        self.partial_tops.setdefault(client_id, []).append(fruit_top)
+        self.received_count[client_id] = self.received_count.get(client_id, 0) + 1
+
+        if self.received_count[client_id] < AGGREGATION_AMOUNT:
+            # client done, should send eof forwrd
+        
         fruit_top = message_protocol.internal.deserialize(message)
         self.output_queue.send(message_protocol.internal.serialize(fruit_top)) # ??? What do joiners do then jajaja
         ack()
