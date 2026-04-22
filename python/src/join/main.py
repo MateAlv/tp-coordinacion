@@ -26,6 +26,28 @@ class JoinFilter:
         self.partial_tops = {}
         self.received_count = {}  
 
+    def _merge_partial_tops(self, client_id):
+        total_by_fruit = {}
+        partial_tops = self.partial_tops.get(client_id, [])
+
+        for partial_top in partial_tops:
+            for fruit, amount in partial_top:
+                new_item = fruit_item.FruitItem(fruit, int(amount))
+                current_item = total_by_fruit.get(fruit, fruit_item.FruitItem(fruit, 0))
+                total_by_fruit[fruit] = current_item + new_item
+
+        return total_by_fruit
+
+    def _build_final_top(self, total_by_fruit):
+        sorted_items = sorted(total_by_fruit.values())
+        sorted_items.reverse()
+
+        top_items = []
+        for item in sorted_items[:TOP_SIZE]:
+            top_items.append((item.fruit, item.amount))
+
+        return top_items
+
     def process_messsage(self, message, ack, nack):
         logging.info("Received top")
 
@@ -34,17 +56,18 @@ class JoinFilter:
         self.received_count[client_id] = self.received_count.get(client_id, 0) + 1
 
         if self.received_count[client_id] < AGGREGATION_AMOUNT:
-            # client done, should send eof forwrd
-            pass
-        
-        total_by_fruit = {}
-        for partial in self.partial_tops[client_id]:
-            for fruit, amount in partial:
-                total_by_fruit[fruit] = total_by_fruit.get(fruit, 0) + int(amount)
+            ack()
+            return
+
+        total_by_fruit = self._merge_partial_tops(client_id)
+        final_top = self._build_final_top(total_by_fruit)
 
         self.output_queue.send(
-            message_protocol.internal.serialize([client_id, total_by_fruit])
+            message_protocol.internal.serialize([client_id, final_top])
         )
+
+        self.partial_tops.pop(client_id, None)
+        self.received_count.pop(client_id, None)
 
         ack()
 
