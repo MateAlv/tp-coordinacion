@@ -188,8 +188,8 @@ class SumFilter:
 
         exchange.start_consuming(on_eof_signal)
 
-        for exchange in control_thread_exchanges:
-            exchange.close()
+        for ex in control_thread_exchanges:
+            ex.close()
         exchange.close()
 
     def _start_response_thread(self):
@@ -204,8 +204,8 @@ class SumFilter:
 
         queue.start_consuming(on_count_report)
 
-        for exchange in response_thread_exchanges:
-            exchange.close()
+        for ex in response_thread_exchanges:
+            ex.close()
         queue.close()
 
     def _handle_sigterm(self, _signum, _frame):
