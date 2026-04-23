@@ -47,6 +47,11 @@ class SumFilter:
 
         self.my_response_queue_name = f"{SUM_RESPONSE_QUEUE_PREFIX}_{ID}"
 
+        self._control_thread_exchange = None
+        self._response_thread_queue = None
+        self._eof_control_thread = None
+        self._response_thread = None
+
     def _new_data_output_exchanges(self):
         exchanges = []
         for i in range(AGGREGATION_AMOUNT):
@@ -145,11 +150,6 @@ class SumFilter:
 
         self._leader_broadcast_eof(client_id, expected_count)
 
-    def _new_response_queue(self, leader_id):
-        return middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
-        )
-
     def _process_data(self, client_id, fruit, amount):
         logging.info("Processing data for client %s", client_id)
 
@@ -176,36 +176,65 @@ class SumFilter:
             logging.exception("Error processing data message")
             nack()
 
-    def _handle_sigterm(self, signum, frame):
-        self.input_queue.stop_consuming()
-
-    def _start_control_thread(self):
+    def _start_eof_control_thread(self):
         exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
             MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE]
         )
         control_thread_exchanges = self._new_data_output_exchanges()
+        self._control_thread_exchange = exchange
 
         def on_eof_signal(message, ack, nack):
             self._handle_eof_signal(message, ack, nack, control_thread_exchanges)
 
         exchange.start_consuming(on_eof_signal)
 
+        for exchange in control_thread_exchanges:
+            exchange.close()
+        exchange.close()
+
     def _start_response_thread(self):
         queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, self.my_response_queue_name
         )
         response_thread_exchanges = self._new_data_output_exchanges()
+        self._response_thread_queue = queue
 
         def on_count_report(message, ack, nack):
             self._leader_handle_count_report(message, ack, nack, response_thread_exchanges)
 
         queue.start_consuming(on_count_report)
 
+        for exchange in response_thread_exchanges:
+            exchange.close()
+        queue.close()
+
+    def _handle_sigterm(self, _signum, _frame):
+        self.input_queue.stop_consuming()
+        if self._control_thread_exchange:
+            self._control_thread_exchange.connection.add_callback_threadsafe(
+                self._control_thread_exchange.stop_consuming
+            )
+        if self._response_thread_queue:
+            self._response_thread_queue.connection.add_callback_threadsafe(
+                self._response_thread_queue.stop_consuming
+            )
+
     def start(self):
         signal.signal(signal.SIGTERM, self._handle_sigterm)
-        threading.Thread(target=self._start_control_thread, daemon=True).start()
-        threading.Thread(target=self._start_response_thread, daemon=True).start()
+
+        self._eof_control_thread = threading.Thread(target=self._start_eof_control_thread)
+        self._response_thread = threading.Thread(target=self._start_response_thread)
+        self._eof_control_thread.start()
+        self._response_thread.start()
+
         self.input_queue.start_consuming(self.process_messsage)
+        
+        self._eof_control_thread.join(timeout=5)
+        self._response_thread.join(timeout=5)
+        self.input_queue.close()
+        self._control_sender.close()
+        for exchange in self.data_output_exchanges:
+            exchange.close()
 
 def main():
     logging.basicConfig(level=logging.INFO)
