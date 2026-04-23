@@ -81,5 +81,18 @@ Al momento de la evaluación y ejecución de las pruebas se **descartarán** o *
 Redactar un breve informe explicando el modo en que se coordinan las instancias de Sum y Aggregation, así como el modo en el que el sistema escala respecto a los clientes y a la cantidad de controles.
 
 
-## Coordinación planteada (Formalizar...):
-We are supposed to partition packages to each agg based on their id and amount. EOF is handled with summers keeping track of received messages. Then when first summer gets the EOF with the expected messagfes  then it should fanout the EOF and all summers should start sending through a leader channel their current amount and their id whenever they get a new message after EOF. This way, the leader has to keep track of all processed messages and send the EOF forward when expected message count equals count received.
+## Coordinación entre instancias de Sum y Aggregation
+
+### Partición de datos hacia los Aggregators
+Cada Aggregator tiene una partición de todas las frutas y se dedica siempre a agregar solo su propia partición. 
+Cada instancia de Sum envía los pares (fruta, cantidad) a los Aggregators usando un hashing consistente (tal que todos los Summers hagan el mismo hashing) para determinar a qué Aggregator le corresponde cada fruta. Esto garantiza que todas las sumas parciales de una misma fruta lleguen siempre al mismo Aggregator, evitando procesamiento redundante y permitiendo que cada Aggregator trabaje de forma independiente.
+
+### Coordinación del EOF entre instancias de Sum
+
+El problema central es que el Gateway solo le avisa el fin de ingesta a una sola instancia de Sum (la que recibe el mensaje EOF), pero todas las instancias estuvieron procesando datos en paralelo. La solución implementada es una barrera de conteo con líder:
+
+1. La instancia de Sum que recibe el EOF del Gateway actúa como líder para esa consulta. El mensaje del Gateway incluye la cantidad total de registros enviados (`N`).
+2. El líder hace broadcast del EOF a todas las instancias de Sum via un exchange directo, incluyendo el valor `N` y su propio ID.
+3. Cada instancia de Sum, al recibir ese broadcast, manda al líder todos los pares acumulados hacia los Aggregators y le reporta cuántos mensajes procesó.
+4. A medida que llegan mensajes de datos después del broadcast (que puede pasar por reordenamiento en la cola o un mensaje habiendo llegado más tarde), cada Sum los reenvía directamente a los Aggregators y le reporta +1 al líder.
+5. El líder acumula los conteos reportados. Cuando la suma total es igual a `N`, sabe que todos los datos ya fueron enviados a los Aggregators y emite el EOF hacia todos los Summers.
