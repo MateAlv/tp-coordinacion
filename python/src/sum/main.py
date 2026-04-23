@@ -1,5 +1,6 @@
 import os
 import logging
+import signal
 import threading
 import zlib
 
@@ -25,47 +26,47 @@ class SumFilter:
         self.input_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, INPUT_QUEUE
         )
+        self._control_sender = middleware.MessageMiddlewareExchangeRabbitMQ(
+            MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE]
+        )
         self.data_output_exchanges = []
         for i in range(AGGREGATION_AMOUNT):
-            data_output_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-                MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+            self.data_output_exchanges.append(
+                middleware.MessageMiddlewareExchangeRabbitMQ(
+                    MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+                )
             )
-            self.data_output_exchanges.append(data_output_exchange)
 
         self.lock = threading.Lock()
         self.clients = {}
-        
+
         self.pending_eof = {}
 
-        self.leader_totals = {}  
+        self.leader_totals = {}
         self.expected_totals = {}
 
         self.my_response_queue_name = f"{SUM_RESPONSE_QUEUE_PREFIX}_{ID}"
 
     def _new_data_output_exchanges(self):
-        return [
-            middleware.MessageMiddlewareExchangeRabbitMQ(
-                MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+        exchanges = []
+        for i in range(AGGREGATION_AMOUNT):
+            exchanges.append(
+                middleware.MessageMiddlewareExchangeRabbitMQ(
+                    MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{i}"]
+                )
             )
-            for i in range(AGGREGATION_AMOUNT)
-        ]
+        return exchanges
 
     def _aggregation_index(self, fruit):
         return zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
 
-    def _close_exchanges(self, exchanges):
-        for output_exchange in exchanges:
-            try:
-                output_exchange.close()
-            except Exception:
-                pass
-    
-    def _get_exchange_to_aggs(self, fruit):
-        routing_exchange_key = self._aggregation_index(fruit)
-        return self.data_output_exchanges[routing_exchange_key]
-    
-    def _handle_eof_signal(self, message, ack, nack):
-        output_exchanges = []
+    def _forward_data_to_aggs(self, client_id, fruit, amount, exchanges):
+        index = self._aggregation_index(fruit)
+        exchanges[index].send(
+            message_protocol.internal.serialize([client_id, fruit, int(amount)])
+        )
+
+    def _handle_eof_signal(self, message, ack, nack, output_exchanges):
         try:
             fields = message_protocol.internal.deserialize(message)
             if len(fields) != 3:
@@ -78,30 +79,21 @@ class SumFilter:
                 current_fruits = dict(self.clients.get(client_id, [{}, 0])[FRUITS_POS])
                 self.pending_eof[client_id] = (int(expected_total), int(leader_id))
 
-            output_exchanges = self._new_data_output_exchanges()
             for fi in current_fruits.values():
-                index = self._aggregation_index(fi.fruit)
-                output_exchanges[index].send(
-                    message_protocol.internal.serialize([client_id, fi.fruit, fi.amount])
-                )
+                self._forward_data_to_aggs(client_id, fi.fruit, fi.amount, output_exchanges)
 
             self._report_increment_to_leader(client_id, leader_id, increment=current_count)
             ack()
         except Exception:
             logging.exception("Error processing control message")
             nack()
-        finally:
-            self._close_exchanges(output_exchanges)
 
     def _leader_broadcast_eof(self, client_id, expected_count):
-        control_exchange = self._new_control_exchange()
-        control_exchange.send(
+        self._control_sender.send(
             message_protocol.internal.serialize([client_id, int(expected_count), ID])
         )
-        control_exchange.close()
 
-    def _leader_handle_count_report(self, message, ack, nack):
-        output_exchanges = []
+    def _leader_handle_count_report(self, message, ack, nack, output_exchanges):
         try:
             client_id, count = message_protocol.internal.deserialize(message)
             count = int(count)
@@ -118,7 +110,6 @@ class SumFilter:
                     self.pending_eof.pop(client_id, None)
 
             if should_send_eof:
-                output_exchanges = self._new_data_output_exchanges()
                 for output_exchange in output_exchanges:
                     output_exchange.send(message_protocol.internal.serialize([client_id]))
 
@@ -126,28 +117,11 @@ class SumFilter:
         except Exception:
             logging.exception("Error processing leader count report")
             nack()
-        finally:
-            self._close_exchanges(output_exchanges)
-
-    def _forward_data_to_aggs(self, client_id, fruit, amount):
-        self._get_exchange_to_aggs(fruit).send(
-            message_protocol.internal.serialize([client_id, fruit, int(amount)])
-        )
-
-    def _forward_data_to_aggs_with_fresh_connection(self, client_id, fruit, amount):
-        index = self._aggregation_index(fruit)
-        output_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, AGGREGATION_PREFIX, [f"{AGGREGATION_PREFIX}_{index}"]
-        )
-        try:
-            output_exchange.send(
-                message_protocol.internal.serialize([client_id, fruit, int(amount)])
-            )
-        finally:
-            output_exchange.close()
 
     def _report_increment_to_leader(self, client_id, leader_id, increment=1):
-        response_queue = self._new_response_queue(leader_id)
+        response_queue = middleware.MessageMiddlewareQueueRabbitMQ(
+            MOM_HOST, f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
+        )
         response_queue.send(
             message_protocol.internal.serialize([client_id, int(increment)])
         )
@@ -162,7 +136,7 @@ class SumFilter:
             return
 
         _, leader_id = pending
-        self._forward_data_to_aggs_with_fresh_connection(client_id, fruit, amount)
+        self._forward_data_to_aggs(client_id, fruit, amount, self.data_output_exchanges)
         self._report_increment_to_leader(client_id, leader_id, 1)
 
     def _leader_handle_gateway_eof(self, client_id, expected_count):
@@ -171,17 +145,9 @@ class SumFilter:
 
         self._leader_broadcast_eof(client_id, expected_count)
 
-    def _response_queue_name(self, leader_id):
-        return f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
-
-    def _new_control_exchange(self):
-        return middleware.MessageMiddlewareExchangeRabbitMQ(
-            MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE]
-        )
-
     def _new_response_queue(self, leader_id):
         return middleware.MessageMiddlewareQueueRabbitMQ(
-            MOM_HOST, self._response_queue_name(leader_id)
+            MOM_HOST, f"{SUM_RESPONSE_QUEUE_PREFIX}_{leader_id}"
         )
 
     def _process_data(self, client_id, fruit, amount):
@@ -210,21 +176,35 @@ class SumFilter:
             logging.exception("Error processing data message")
             nack()
 
+    def _handle_sigterm(self, signum, frame):
+        self.input_queue.stop_consuming()
+
     def _start_control_thread(self):
         exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
             MOM_HOST, SUM_CONTROL_EXCHANGE, [SUM_CONTROL_EXCHANGE]
         )
-        exchange.start_consuming(self._handle_eof_signal)
+        control_thread_exchanges = self._new_data_output_exchanges()
+
+        def on_eof_signal(message, ack, nack):
+            self._handle_eof_signal(message, ack, nack, control_thread_exchanges)
+
+        exchange.start_consuming(on_eof_signal)
 
     def _start_response_thread(self):
         queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, self.my_response_queue_name
         )
-        queue.start_consuming(self._leader_handle_count_report)
+        response_thread_exchanges = self._new_data_output_exchanges()
+
+        def on_count_report(message, ack, nack):
+            self._leader_handle_count_report(message, ack, nack, response_thread_exchanges)
+
+        queue.start_consuming(on_count_report)
 
     def start(self):
-        threading.Thread(target=self._start_control_thread).start()
-        threading.Thread(target=self._start_response_thread).start()
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
+        threading.Thread(target=self._start_control_thread, daemon=True).start()
+        threading.Thread(target=self._start_response_thread, daemon=True).start()
         self.input_queue.start_consuming(self.process_messsage)
 
 def main():
